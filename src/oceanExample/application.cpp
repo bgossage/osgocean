@@ -18,6 +18,7 @@
 #include <string>
 #include <vector>
 #include <iostream>
+#include <fstream>
 
 #include <osgViewer/Viewer>
 #include <osgViewer/CompositeViewer>
@@ -29,6 +30,7 @@
 #include <osg/Notify>
 
 #include <osgDB/ReadFile>
+#include <osgDB/WriteFile>
 
 #include <osgShadow/ShadowedScene>
 #include <osgShadow/ViewDependentShadowMap>
@@ -40,6 +42,27 @@
 #include "SceneEventHandler.h"
 #include "Scene.h"
 #include "TextHUD.h"
+
+using namespace std;
+
+namespace
+{
+
+class WriteCallback : public osg::Camera::DrawCallback
+{
+   public:
+       WriteCallback( osg::Image* img, std::string const& filename )
+       : m_image(img), m_filename(filename){}
+
+       virtual void operator()( osg::RenderInfo& renderInfo ) const;
+
+
+   protected:
+       osg::ref_ptr<osg::Image> m_image;
+       std::string m_filename;
+};// end class WriteCallback
+
+
 
 class BoatPositionCallback : public osg::NodeCallback
 {
@@ -78,8 +101,10 @@ public:
     }
 
     osg::observer_ptr<osgOcean::OceanScene> _oceanScene;
-};
 
+};// end class oatPositionCallback
+
+}// end anonymous namespace
 
 // Useful argument lists:
 // Test shadows:
@@ -133,7 +158,7 @@ int main(int argc, char *argv[])
     float reflectionDamping = 0.35f;
     while (arguments.read("--reflectionDamping", reflectionDamping));
 
-    float scale = 1e-8;
+    float scale = 1e-8f;
     while (arguments.read("--waveScale", scale ) );
 
     bool isChoppy = true;
@@ -146,7 +171,7 @@ int main(int argc, char *argv[])
     float crestFoamHeight = 2.2f;
     while (arguments.read("--crestFoamHeight", crestFoamHeight));
 
-    double oceanSurfaceHeight = 0.0f;
+    double oceanSurfaceHeight = 0.0;
     while (arguments.read("--oceanSurfaceHeight", oceanSurfaceHeight));
 
     bool testCollision = false;
@@ -313,7 +338,7 @@ int main(int argc, char *argv[])
 
             osg::ref_ptr<osg::MatrixTransform> boatTransform = new osg::MatrixTransform;
             boatTransform->addChild(boat.get());
-            boatTransform->setMatrix(osg::Matrix::translate(osg::Vec3f(0.0f, 160.0f,0.0f)));
+            boatTransform->setMatrix(osg::Matrix::translate(osg::Vec3f(0.0f, 2.0f,100.0f)));
             boatTransform->setUpdateCallback( new BoatPositionCallback(scene->getOceanScene()) );
 
             scene->getOceanScene()->addChild(boatTransform.get());   
@@ -398,8 +423,10 @@ int main(int argc, char *argv[])
         viewer = singleViewer;
         view = singleViewer;
 
+       cout << "Single View.." << endl;
+
         // Otherwise, a window with a single view.
-        view->setUpViewInWindow( 150, 150, 1024, 768, 0 );
+        view->setUpViewInWindow( 150, 150, 512, 512, 0 );
     }
 
     view->setSceneData( root.get() );
@@ -420,10 +447,82 @@ int main(int argc, char *argv[])
 
     viewer->realize();
 
+
+   osg::Image* captureImage = new osg::Image;
+   osg::Camera* camera = hud->getHudCamera() ;view->getCamera();
+
+
+   std::string image_filename = "waves.raw";
+
+   {
+      std::ofstream strm( image_filename.c_str(), ios::binary|ios::out );
+   }
+
+   size_t frames = 0;
+
+   osg::ref_ptr<WriteCallback> write_cb = new WriteCallback( captureImage, image_filename );
+
+   camera->setPostDrawCallback( write_cb.get() );
+
     while(!viewer->done())
     {
-        viewer->frame();    
+        viewer->frame();
+
+        ++frames;
+
+      //  cout << "Frames = " << frames << endl;
+
     }
 
     return 0;
-}
+}// end main ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+namespace
+{
+
+
+void WriteCallback::operator()( osg::RenderInfo& renderInfo ) const
+{
+
+    if ( m_image.valid() )
+    {
+        osg::GraphicsContext* gc = renderInfo.getState()->getGraphicsContext();
+        if ( gc->getTraits() )
+        {
+            int width = gc->getTraits()->width;
+            int height = gc->getTraits()->height;
+            GLenum pixelFormat = (gc->getTraits()->alpha ? GL_RGBA : GL_RGB);
+            m_image->readPixels( 0, 0, width, height, pixelFormat, GL_UNSIGNED_BYTE );
+
+            std::ofstream strm( m_filename.c_str(), ios::binary|ios::app );
+
+        ///    std::cout << "Writing image file: " << m_filename << "  size:" << width << "," << height << std::endl;
+
+            for ( int row=height-1; row>=0; row-- )
+            {
+               for ( int col=0; col<width; col++ )
+               {
+                  unsigned char* out_pixel = reinterpret_cast<unsigned char*>( const_cast<unsigned char*>(m_image->data( col,row )) );
+
+                  unsigned char pixels[3] = { 128,128,128 };
+
+               //   strm.write( reinterpret_cast<char*>(out_pixel), sizeof(char) );
+                  ++out_pixel;
+               //   strm.write( reinterpret_cast<char*>(out_pixel), sizeof(char) );
+                  ++out_pixel;
+                  strm.write( reinterpret_cast<char*>(out_pixel), sizeof(char) );
+               }//end fof
+            }//end for
+
+             osgDB::writeImageFile( *m_image, "waves.jpg" );
+
+        }// end if
+
+    }// end if image valid
+
+}// end operator() ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+}// end anonmyous namespace
+
+// EOF
